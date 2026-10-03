@@ -31,4 +31,29 @@ Prompts can be read from files with `--prompt-file` / `--system-file`.
 Frame sampling: `--fps`, `--max-frames`, `--max-pixels`. Model cache: `--hf-home`.
 See `python qwen3vl_video.py -h` for all options.
 
+## LEMMA question answering
+
+`qwen3vl_qa.py` answers the multiple-choice questions in
+`LEMMA/subsets/q8_all_2x1_2x2.json` from one camera view and reports accuracy:
+
+```bash
+python qwen3vl_qa.py --view fpv1      # or fpv2 / master
+```
+
+Results go to `outputs/qa_<view>_<model>.jsonl`, one line per question. Rerunning the
+same command skips questions already in that file. Delete the file to start over.
+Use `--limit N` for a quick test and `--model` / `--output` like above.
+
+### Two views
+
+`qwen3vl_qa_multiview.py` feeds two synchronized views to one model in a single prompt:
+
+```bash
+python qwen3vl_qa_multiview.py --views fpv1 master --model 32b
+```
+
+Each video is preceded by a label (`View 1 (first-person, fpv1):`, `View 2 (third-person, master):`).
+`--max-frames` applies per view and defaults to 320, half the single-view budget.
+Results go to `outputs/qa_<v1>+<v2>_<model>.jsonl`.
+
 `qwen3vl_video.ipynb` is the interactive notebook version (8B only).

@@ -11,6 +11,7 @@ Prompts can also be read from files with --system-file / --prompt-file.
 
 Models (--model takes a shortcut below or any Hugging Face repo id):
     8b         Qwen/Qwen3-VL-8B-Instruct, bf16                 ~17 GB
+    32b        Qwen/Qwen3-VL-32B-Instruct, bf16                ~66 GB  (needs an 80 GB+ GPU, e.g. GH200)
     32b-nf4    Qwen/Qwen3-VL-32B-Instruct, bitsandbytes NF4    ~20 GB  (downloads ~66 GB bf16 weights)
     32b-awq    QuantTrio/Qwen3-VL-32B-Instruct-AWQ, AWQ 4-bit  ~21 GB  (downloads ~21 GB)
 --quant {none,nf4,awq} is set by the shortcut; pass it explicitly for other repo ids.
@@ -19,6 +20,8 @@ import argparse
 import os
 import sys
 import time
+
+DEFAULT_HF_HOME = "/work/hdd/bivz/hnguyen24/hf"
 
 
 def parse_args():
@@ -38,7 +41,7 @@ def parse_args():
     p.add_argument("--model", default="8b", help="shortcut (%s) or Hugging Face repo id" % ", ".join(MODELS))
     p.add_argument("--quant", choices=["none", "nf4", "awq"], default=None,
                    help="4-bit quantization; defaults to the shortcut's setting, else none")
-    p.add_argument("--hf-home", default="/data/foundation_models_checkpoints",
+    p.add_argument("--hf-home", default=DEFAULT_HF_HOME,
                    help="Hugging Face cache root")
 
     # Frame sampling. Lower these if you hit OOM; raise for finer temporal detail.
@@ -51,7 +54,7 @@ def parse_args():
 
 MODELS = {  # shortcut -> (repo id, quantization)
     "8b": ("Qwen/Qwen3-VL-8B-Instruct", "none"),
-    "32b": ("Qwen/Qwen3-VL-32B-Instruct", "none"),  # ~66 GB bf16: does not fit on one 48 GB GPU
+    "32b": ("Qwen/Qwen3-VL-32B-Instruct", "none"),  # ~66 GB bf16: fits on a GH200 (96 GB), not on a 48 GB GPU
     "32b-nf4": ("Qwen/Qwen3-VL-32B-Instruct", "nf4"),
     "32b-awq": ("QuantTrio/Qwen3-VL-32B-Instruct-AWQ", "awq"),
 }
