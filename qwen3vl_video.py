@@ -38,7 +38,7 @@ def parse_args():
     p.add_argument("--model", default="8b", help="shortcut (%s) or Hugging Face repo id" % ", ".join(MODELS))
     p.add_argument("--quant", choices=["none", "nf4", "awq"], default=None,
                    help="4-bit quantization; defaults to the shortcut's setting, else none")
-    p.add_argument("--hf-home", default="/data/foundation_models_checkpoints",
+    p.add_argument("--hf-home", default="/anvil/scratch/x-hnguyen24/foundation_model_checkpoints",
                    help="Hugging Face cache root")
 
     # Frame sampling. Lower these if you hit OOM; raise for finer temporal detail.
