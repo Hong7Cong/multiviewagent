@@ -80,6 +80,13 @@ def load_model(model_path, quant):
         if not hasattr(act, "PytorchGELUTanh"):
             act.PytorchGELUTanh = act.GELUTanh
         kwargs["dtype"] = torch.float16  # AWQ GEMM kernels run in fp16
+        # The checkpoint skips "visual", but transformers >= 5 matches skip names from the start of
+        # the module path, and the vision tower lives at "model.visual"; without this its bf16 linears
+        # get replaced by AWQ layers and loading fails (in_features 4304 not divisible by 128).
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_path)
+        config.quantization_config["modules_to_not_convert"] = ["model.visual", "lm_head"]
+        kwargs["config"] = config
     return Qwen3VLForConditionalGeneration.from_pretrained(model_path, **kwargs).eval()
 
 
