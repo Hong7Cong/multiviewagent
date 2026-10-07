@@ -11,6 +11,7 @@ Prompts can also be read from files with --system-file / --prompt-file.
 
 Models (--model takes a shortcut below or any Hugging Face repo id):
     8b         Qwen/Qwen3-VL-8B-Instruct, bf16                 ~17 GB
+    32b        Qwen/Qwen3-VL-32B-Instruct, bf16                ~66 GB  (needs an 80 GB+ GPU, e.g. GH200)
     32b-nf4    Qwen/Qwen3-VL-32B-Instruct, bitsandbytes NF4    ~20 GB  (downloads ~66 GB bf16 weights)
     32b-awq    QuantTrio/Qwen3-VL-32B-Instruct-AWQ, AWQ 4-bit  ~21 GB  (downloads ~21 GB)
 --quant {none,nf4,awq} is set by the shortcut; pass it explicitly for other repo ids.
@@ -19,6 +20,8 @@ import argparse
 import os
 import sys
 import time
+
+DEFAULT_HF_HOME = "/anvil/scratch/x-hnguyen24/foundation_model_checkpoints"
 
 
 def parse_args():
@@ -38,7 +41,7 @@ def parse_args():
     p.add_argument("--model", default="8b", help="shortcut (%s) or Hugging Face repo id" % ", ".join(MODELS))
     p.add_argument("--quant", choices=["none", "nf4", "awq"], default=None,
                    help="4-bit quantization; defaults to the shortcut's setting, else none")
-    p.add_argument("--hf-home", default="/anvil/scratch/x-hnguyen24/foundation_model_checkpoints",
+    p.add_argument("--hf-home", default=DEFAULT_HF_HOME,
                    help="Hugging Face cache root")
 
     # Frame sampling. Lower these if you hit OOM; raise for finer temporal detail.
@@ -51,7 +54,7 @@ def parse_args():
 
 MODELS = {  # shortcut -> (repo id, quantization)
     "8b": ("Qwen/Qwen3-VL-8B-Instruct", "none"),
-    "32b": ("Qwen/Qwen3-VL-32B-Instruct", "none"),  # ~66 GB bf16: does not fit on one 48 GB GPU
+    "32b": ("Qwen/Qwen3-VL-32B-Instruct", "none"),  # ~66 GB bf16: fits on a GH200 (96 GB), not on a 48 GB GPU
     "32b-nf4": ("Qwen/Qwen3-VL-32B-Instruct", "nf4"),
     "32b-awq": ("QuantTrio/Qwen3-VL-32B-Instruct-AWQ", "awq"),
 }
@@ -77,6 +80,16 @@ def load_model(model_path, quant):
         if not hasattr(act, "PytorchGELUTanh"):
             act.PytorchGELUTanh = act.GELUTanh
         kwargs["dtype"] = torch.float16  # AWQ GEMM kernels run in fp16
+        # The checkpoint skips "visual", but transformers >= 5 matches skip names from the start of
+        # the module path, and the vision tower lives at "model.visual"; without this its bf16 linears
+        # get replaced by AWQ layers and loading fails (in_features 4304 not divisible by 128).
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_path)
+        config.quantization_config["modules_to_not_convert"] = ["model.visual", "lm_head"]
+        # The auto-picked Marlin kernel JIT-compiles a C++ extension (needs ninja + nvcc on the node);
+        # the Triton GEMM kernel needs no build step.
+        config.quantization_config["backend"] = "gemm_triton"
+        kwargs["config"] = config
     return Qwen3VLForConditionalGeneration.from_pretrained(model_path, **kwargs).eval()
 
 
