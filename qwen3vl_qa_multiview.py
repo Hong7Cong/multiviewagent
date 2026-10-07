@@ -1,6 +1,7 @@
 r"""Answer LEMMA multiple-choice questions with Qwen3-VL from two camera views at once and report accuracy.
 
 Example:
+    cd /projects/bivz/hnguyen24/multiviewagent
     python qwen3vl_qa_multiview.py --views fpv1 master --model 32b
     python qwen3vl_qa_multiview.py --views fpv1 fpv2 --model 32b-nf4 --limit 5
 
