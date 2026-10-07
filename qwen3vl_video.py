@@ -86,6 +86,9 @@ def load_model(model_path, quant):
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path)
         config.quantization_config["modules_to_not_convert"] = ["model.visual", "lm_head"]
+        # The auto-picked Marlin kernel JIT-compiles a C++ extension (needs ninja + nvcc on the node);
+        # the Triton GEMM kernel needs no build step.
+        config.quantization_config["backend"] = "gemm_triton"
         kwargs["config"] = config
     return Qwen3VLForConditionalGeneration.from_pretrained(model_path, **kwargs).eval()
 
