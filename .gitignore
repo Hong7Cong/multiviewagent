@@ -2,6 +2,7 @@
 comind/
 lemma/
 *.mp4
+*.json
 
 # run artifacts / local
 outputs/

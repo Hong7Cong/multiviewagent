@@ -149,7 +149,11 @@ def caption_batch(model, processor, args, frames_list, times_list, windows):
 
 
 def caption_video(model, processor, args, video_path: Path) -> None:
-    out_file = Path(args.out_dir) / f"{video_path.stem}_qwen3vl_{int(args.window_sec)}s-captions.json"
+    out_dir = Path(args.out_dir)
+    if args.input_root is not None:  # mirror the input folder structure under out_dir
+        out_dir = out_dir / video_path.resolve().parent.relative_to(args.input_root.resolve())
+        out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{video_path.stem}_qwen3vl_{int(args.window_sec)}s-captions.json"
     captions = json.loads(out_file.read_text()) if out_file.exists() else []
     done = {c["window"] for c in captions if not c["truncated"]}
 
@@ -205,6 +209,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Caption long videos in fixed windows with Qwen3-VL Thinking.")
     parser.add_argument("videos", nargs="+", type=Path, help="Video files to caption.")
     parser.add_argument("--out-dir", type=Path, required=True, help="Directory for per-video caption JSONs.")
+    parser.add_argument("--input-root", type=Path, default=None,
+                        help="If set, write each JSON under out-dir at the video's path relative to this root.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--view", choices=list(VIEW_DESCRIPTIONS), default="generic",
                         help="Camera viewpoint, used to tailor the prompt (default: generic).")
