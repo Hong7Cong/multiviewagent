@@ -45,8 +45,12 @@ def parse_args():
     p.add_argument("--fps", type=float, default=1.0, help="frames sampled per second of video")
     p.add_argument("--max-frames", type=int, default=320, help="hard cap on frames per view")
     p.add_argument("--max-pixels", type=int, default=360 * 420, help="per-frame pixel budget after resizing")
-    p.add_argument("--max-new-tokens", type=int, default=16)
+    p.add_argument("--cot", action="store_true",
+                   help="ask for step-by-step reasoning before a final 'Answer: X' line")
+    p.add_argument("--max-new-tokens", type=int, default=None, help="default: 16, or 1024 with --cot")
     args = p.parse_args()
+    if args.max_new_tokens is None:
+        args.max_new_tokens = 1024 if args.cot else 16
     if args.views[0] == args.views[1]:
         p.error("--views must be two different views")
     return args
@@ -117,7 +121,7 @@ def main():
             messages = []
             if args.system:
                 messages.append({"role": "system", "content": [{"type": "text", "text": args.system}]})
-            messages.append({"role": "user", "content": build_content(video_items, args.views, format_question(q))})
+            messages.append({"role": "user", "content": build_content(video_items, args.views, format_question(q, args.cot))})
             text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=[text], videos=videos, video_metadata=video_metadata,
                                do_resize=False,  # frames were already resized by qwen_vl_utils
@@ -128,7 +132,7 @@ def main():
             response = processor.batch_decode(generated[:, inputs["input_ids"].shape[-1]:],
                                               skip_special_tokens=True)[0].strip()
 
-            pred = parse_letter(response)
+            pred = parse_letter(response, args.cot)
             gt = LETTERS[q["correct_answer"]]
             frames = [v.shape[0] for v in videos]
             record = {"id": qid, "take": take, "views": args.views, "pred": pred, "gt": gt,

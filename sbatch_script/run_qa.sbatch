@@ -5,6 +5,7 @@
 #   sbatch sbatch_script/run_qa.sbatch                                         # fpv1, 8b
 #   sbatch --export=ALL,VIEWS=master sbatch_script/run_qa.sbatch
 #   sbatch --export=ALL,VIEWS="fpv1 master",MODEL=32b sbatch_script/run_qa.sbatch
+#   sbatch --export=ALL,VIEWS=fpv1,COT=1 sbatch_script/run_qa.sbatch            # reason, then answer
 # Submit from the multiviewagent/ directory. Results append to outputs/qa_all_<views>_<model>.jsonl,
 # so resubmitting the same job resumes where a timed-out or failed run stopped.
 #
@@ -29,6 +30,7 @@ set -euo pipefail
 VIEWS=${VIEWS:-fpv1}            # "fpv1", "fpv2", "master", or two of them, e.g. "fpv1 master"
 MODEL=${MODEL:-32b-awq}             # 8b, 32b, 32b-nf4, 32b-awq (see qwen3vl_video.py)
 QUESTIONS=${QUESTIONS:-/projects/bivz/hnguyen24/LEMMA/subsets/2x1_2x2_qa.json}
+COT=${COT:-0}                   # 1: reason step by step before answering (--cot), output *_<model>-cot.jsonl
 EXTRA_ARGS=${EXTRA_ARGS:-}      # anything else, e.g. "--limit 5" or "--max-frames 160"
 CHAIN_LEFT=${CHAIN_LEFT:-20}    # successor jobs this job may still queue
 
@@ -38,13 +40,16 @@ cd "$REPO"
 
 read -ra view_list <<< "$VIEWS"
 view_tag=$(IFS=+; echo "${view_list[*]}")
-output=outputs/qa_all_${view_tag}_${MODEL//\//_}.jsonl
+model_tag=${MODEL//\//_}
+if [[ $COT == 1 ]]; then model_tag+=-cot; fi
+output=outputs/qa_all_${view_tag}_${model_tag}.jsonl
 
 case ${#view_list[@]} in
     1) cmd=("$PYTHON" qwen3vl_qa.py --view "${view_list[0]}") ;;
     2) cmd=("$PYTHON" qwen3vl_qa_multiview.py --views "${view_list[@]}") ;;
     *) echo "VIEWS must name one or two views, got: '$VIEWS'" >&2; exit 1 ;;
 esac
+if [[ $COT == 1 ]]; then cmd+=(--cot); fi
 
 remaining() {  # questions in $QUESTIONS without a line in $output
     python3 - "$QUESTIONS" "$output" <<'PY'
