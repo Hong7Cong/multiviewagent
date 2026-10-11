@@ -7,7 +7,9 @@ Run Qwen3-VL on a local video and save the model's answer to a text file.
 ```bash
 pip install "transformers>=4.57.0" accelerate "qwen-vl-utils[decord]"
 pip install bitsandbytes   # for --model 32b-nf4
-pip install autoawq        # for --model 32b-awq
+# gptqmodel needs pypcre; on hosts with an old system PCRE2 (e.g. RHEL 8) build it first:
+# PYPCRE_BUILD_FROM_SOURCE=1 CC=gcc CFLAGS=-fPIC pip install --no-cache-dir pypcre
+pip install gptqmodel       # for --model 32b-awq (transformers 5 loads AWQ via gptqmodel, not autoawq)
 ```
 
 ## Usage
