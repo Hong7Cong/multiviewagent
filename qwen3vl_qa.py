@@ -4,6 +4,7 @@ Example:
     cd /projects/bivz/hnguyen24/multiviewagent
     python qwen3vl_qa.py --view fpv1 --gpu 0
     python qwen3vl_qa.py --view master --model 32b-awq --output outputs/qa_master_32b.jsonl
+    python qwen3vl_qa.py --view fpv1 --cot --output outputs/qa_fpv1_8b-cot.jsonl   # reason, then answer
 
 Question ids look like "26l_21_5_1_Q8_002"; the video is <lemma-root>/26l-21-5-1/<view>.mp4.
 One JSON line per question is appended to --output, so an interrupted run resumes where it stopped
@@ -41,8 +42,13 @@ def parse_args():
     p.add_argument("--fps", type=float, default=1.0, help="frames sampled per second of video")
     p.add_argument("--max-frames", type=int, default=640, help="hard cap on frames fed to the model")
     p.add_argument("--max-pixels", type=int, default=360 * 420, help="per-frame pixel budget after resizing")
-    p.add_argument("--max-new-tokens", type=int, default=16)
-    return p.parse_args()
+    p.add_argument("--cot", action="store_true",
+                   help="ask for step-by-step reasoning before a final 'Answer: X' line")
+    p.add_argument("--max-new-tokens", type=int, default=None, help="default: 16, or 1024 with --cot")
+    args = p.parse_args()
+    if args.max_new_tokens is None:
+        args.max_new_tokens = 1024 if args.cot else 16
+    return args
 
 
 def take_of(qid):
@@ -50,13 +56,21 @@ def take_of(qid):
     return "-".join(qid.split("_")[:4])
 
 
-def format_question(q):
+def format_question(q, cot=False):
     options = "\n".join(f"{LETTERS[i]}. {opt}" for i, opt in enumerate(q["options"]))
-    return (f"{q['question']}\n{options}\n"
-            "Answer with the option's letter from the given choices directly.")
+    if cot:
+        instruction = ("Think step by step and explain your reasoning, then give the final answer "
+                       "on the last line as \"Answer: X\", where X is the option's letter.")
+    else:
+        instruction = "Answer with the option's letter from the given choices directly."
+    return f"{q['question']}\n{options}\n{instruction}"
 
 
-def parse_letter(response):
+def parse_letter(response, cot=False):
+    if cot:
+        # the last "Answer: X", else the last standalone letter (the reasoning may start with "A ...")
+        m = re.findall(r"Answer\W*([A-D])\b", response) or re.findall(r"\b([A-D])\b", response)
+        return m[-1] if m else None
     m = re.search(r"\b([A-D])\b", response.strip())
     return m.group(1) if m else None
 
@@ -122,7 +136,7 @@ def main():
             messages = []
             if args.system:
                 messages.append({"role": "system", "content": [{"type": "text", "text": args.system}]})
-            messages.append({"role": "user", "content": [video_item, {"type": "text", "text": format_question(q)}]})
+            messages.append({"role": "user", "content": [video_item, {"type": "text", "text": format_question(q, args.cot)}]})
             text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=[text], videos=videos, video_metadata=video_metadata,
                                do_resize=False,  # frames were already resized by qwen_vl_utils
@@ -133,7 +147,7 @@ def main():
             response = processor.batch_decode(generated[:, inputs["input_ids"].shape[-1]:],
                                               skip_special_tokens=True)[0].strip()
 
-            pred = parse_letter(response)
+            pred = parse_letter(response, args.cot)
             gt = LETTERS[q["correct_answer"]]
             record = {"id": qid, "take": take, "view": args.view, "pred": pred, "gt": gt,
                       "correct": pred == gt, "response": response,
