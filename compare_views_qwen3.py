@@ -1,5 +1,5 @@
 """
-Compare the helper and leader egocentric captions of each 30 s window with the text-only Qwen3-8B LLM and
+Compare the helper and leader egocentric captions of each 30 s window with a text-only Qwen3 LLM (8B or 32B) and
 list the actions/events seen only from the helper view, only from the leader view, and from both.
 
 Inputs are the per-window caption JSONs written by caption_videos_qwen3vl.py:
@@ -17,6 +17,14 @@ Example:
     python compare_views_qwen3.py --caption-root outputs/comind_v1
     python compare_views_qwen3.py outputs/comind_v1/recordings/<id>/mp4s --max-windows 2   # quick test
     python compare_views_qwen3.py --caption-root outputs/comind_v1 --think   # let Qwen3 reason first
+    python compare_views_qwen3.py --caption-root outputs/comind_v1 --model 32b-awq
+
+Model shortcuts (--model):
+    8b         Qwen/Qwen3-8B, bf16                  ~16 GB
+    32b        Qwen/Qwen3-32B, bf16                 ~66 GB  (needs an 80 GB+ GPU, e.g. GH200)
+    32b-nf4    Qwen/Qwen3-32B, bitsandbytes NF4     ~20 GB  (downloads ~66 GB bf16 weights)
+    32b-awq    Qwen/Qwen3-32B-AWQ, AWQ 4-bit        ~20 GB  (downloads ~20 GB)
+--quant {none,nf4,awq} is set by the shortcut; pass it explicitly for other repo ids.
 """
 
 import argparse
@@ -31,7 +39,12 @@ from huggingface_hub import snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 DEFAULT_HF_HOME = "/anvil/scratch/x-hnguyen24/foundation_model_checkpoints"
-MODELS = {"8b": "Qwen/Qwen3-8B"}  # shortcut -> repo id; any other repo id works too
+MODELS = {  # shortcut -> (repo id, quantization); any other repo id works too
+    "8b": ("Qwen/Qwen3-8B", "none"),
+    "32b": ("Qwen/Qwen3-32B", "none"),  # ~66 GB bf16: fits on a GH200 (96 GB), not on a 48 GB GPU
+    "32b-nf4": ("Qwen/Qwen3-32B", "nf4"),
+    "32b-awq": ("Qwen/Qwen3-32B-AWQ", "awq"),
+}
 HELPER_FILE = "helper_trimmed_sync_qwen3vl_30s-captions.json"
 LEADER_FILE = "leader_trimmed_sync_qwen3vl_30s-captions.json"
 KEYS = ("helper_event_only", "leader_event_only", "same_event_from_both_view")
@@ -116,6 +129,33 @@ def generate_batch(model, tokenizer, args, prompts: list[str]) -> list[tuple[str
     return results
 
 
+def load_model(model_path, quant):
+    kwargs = dict(dtype=torch.bfloat16, device_map="auto", attn_implementation="sdpa")
+    if quant == "nf4":
+        from transformers import BitsAndBytesConfig
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            llm_int8_skip_modules=["lm_head"],  # keep the output head in bf16
+        )
+    elif quant == "awq":
+        # autoawq 0.2.9 imports a name that transformers >= 4.57 renamed.
+        import transformers.activations as act
+        if not hasattr(act, "PytorchGELUTanh"):
+            act.PytorchGELUTanh = act.GELUTanh
+        kwargs["dtype"] = torch.float16  # AWQ GEMM kernels run in fp16
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_path)
+        config.quantization_config["modules_to_not_convert"] = ["lm_head"]
+        # The auto-picked Marlin kernel JIT-compiles a C++ extension (needs ninja + nvcc on the node);
+        # the Triton GEMM kernel needs no build step.
+        config.quantization_config["backend"] = "gemm_triton"
+        kwargs["config"] = config
+    return AutoModelForCausalLM.from_pretrained(model_path, **kwargs).eval()
+
+
 def load_windows(path: Path) -> dict[int, dict]:
     return {c["window"]: c for c in json.loads(path.read_text()) if not c["truncated"] and c["caption"]}
 
@@ -169,12 +209,14 @@ def find_recordings(args) -> list[Path]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compare helper vs leader captions per window with Qwen3-8B.")
+    parser = argparse.ArgumentParser(description="Compare helper vs leader captions per window with Qwen3.")
     parser.add_argument("recordings", nargs="*", type=Path,
                         help="mp4s/ folders that hold the helper and leader caption JSONs.")
     parser.add_argument("--caption-root", type=Path, default=None,
                         help="Also process every <caption-root>/recordings/*/mp4s folder with both views.")
     parser.add_argument("--model", default="8b", help="shortcut (%s) or Hugging Face repo id" % ", ".join(MODELS))
+    parser.add_argument("--quant", choices=["none", "nf4", "awq"], default=None,
+                        help="4-bit quantization; defaults to the shortcut's setting, else none")
     parser.add_argument("--hf-home", default=DEFAULT_HF_HOME, help="Hugging Face cache root")
     parser.add_argument("--no-thinking", dest="use_thinking", action="store_false",
                         help="Compare captions only; leave out the captioner's reasoning traces.")
@@ -193,7 +235,11 @@ def parse_args() -> argparse.Namespace:
         parser.error("give mp4s/ folders or --caption-root")
     if args.max_new_tokens is None:
         args.max_new_tokens = 8192 if args.think else 1024
-    args.model_tag = ("qwen3-8b" if args.model == "8b" else args.model.split("/")[-1]) + ("-think" if args.think else "")
+    args.repo_id, quant = MODELS.get(args.model, (args.model, "none"))
+    args.quant = args.quant or quant
+    # Output tag: the shortcut (or repo name), plus the quantization when it overrides the shortcut's default.
+    args.model_tag = (f"qwen3-{args.model}" if args.model in MODELS else args.model.split("/")[-1]) \
+        + (f"-{args.quant}" if args.quant != quant else "") + ("-think" if args.think else "")
     return args
 
 
@@ -204,13 +250,10 @@ def main():
     if not recordings:
         return
 
-    repo_id = MODELS.get(args.model, args.model)
-    model_path = snapshot_download(repo_id, cache_dir=os.path.join(args.hf_home, "hub"))
+    model_path = snapshot_download(args.repo_id, cache_dir=os.path.join(args.hf_home, "hub"))
     tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="left")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path, dtype=torch.bfloat16, device_map="auto", attn_implementation="sdpa",
-    ).eval()
-    print(f"model: {repo_id}")
+    model = load_model(model_path, args.quant)
+    print(f"model: {args.repo_id} | quant: {args.quant}")
 
     for mp4s_dir in recordings:
         compare_recording(model, tokenizer, args, mp4s_dir)
