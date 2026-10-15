@@ -59,3 +59,32 @@ Each video is preceded by a label (`View 1 (first-person, fpv1):`, `View 2 (thir
 Results go to `outputs/qa_<v1>+<v2>_<model>.jsonl`.
 
 `qwen3vl_video.ipynb` is the interactive notebook version (8B only).
+
+## CoMinD helper vs leader comparison
+
+`compare_views_qwen3.py` reads the per-window helper and leader captions written by
+`caption_videos_qwen3vl.py` and asks a text-only Qwen3 model which actions were seen only by the
+helper, only by the leader, or by both. Output goes next to the captions as
+`recordings/<id>/mp4s/helper_vs_leader_<model>_30s-events.json`. Reruns skip windows already done.
+
+| `--model`  | Checkpoint                              | GPU memory |
+|------------|-----------------------------------------|------------|
+| `8b`       | `Qwen/Qwen3-8B`, bf16                   | ~16 GB |
+| `32b`      | `Qwen/Qwen3-32B`, bf16                  | ~66 GB (GH200) |
+| `32b-nf4`  | `Qwen/Qwen3-32B` + bitsandbytes NF4     | ~20 GB |
+| `32b-awq`  | `Qwen/Qwen3-32B-AWQ`                    | ~20 GB |
+
+To run every recording on DeltaAI, use the submit script. It downloads the model on the login node,
+then submits `sbatch_script/compare_views_comind.sbatch` as an array of `NSHARDS` GPU tasks (default 8),
+each of which re-queues itself until its recordings are done:
+
+```bash
+bash sbatch_script/submit_compare_views_comind.sh                  # Qwen3-8B
+MODEL=32b-awq bash sbatch_script/submit_compare_views_comind.sh    # Qwen3-32B-AWQ
+MODEL=32b NSHARDS=16 EXTRA_ARGS="--think" bash sbatch_script/submit_compare_views_comind.sh
+squeue -u $USER -n compare-views
+```
+
+Other settings: `CAPTION_ROOT` (default `outputs/comind_v1`), `BATCH_SIZE`, `CHAIN_LEFT`, and
+`DRY_RUN=1` to print the `sbatch` command without submitting. The `qwen3vl` env has no
+bitsandbytes, so `32b-nf4` does not run there.
